@@ -1703,7 +1703,7 @@
                             <div class="form-group">
                                 <label class="form-label">Día de Pago (cada mes)</label>
                                 <select id="creditDiaPago" class="form-control">
-                                    ${Array.from({length: 30}, (_, i) => `<option value="${i+1}">${i+1}</option>`).join('')}
+                                    <!-- Se llena dinámicamente con JavaScript -->
                                 </select>
                             </div>
                         </div>
@@ -1797,6 +1797,23 @@
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="creditModule.closeDetailModal()">Cerrar</button>
                 <button class="btn btn-primary" onclick="creditModule.printDetail()">Imprimir</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: DETALLE CLIENTE (NUEVO) -->
+    <div id="modalClientDetail" class="modal">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <div class="modal-title">Detalle Completo del Cliente</div>
+                <button class="modal-close" onclick="clientModule.closeDetailModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="clientDetailContent">
+                <!-- Contenido dinámico -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="clientModule.closeDetailModal()">Cerrar</button>
+                <button class="btn btn-primary" onclick="clientModule.printDetail()">Imprimir</button>
             </div>
         </div>
     </div>
@@ -2728,7 +2745,102 @@
 
             viewDetail: (id) => {
                 const client = clientModule.clients[id];
-                alert(`Detalle de ${client.nombres} ${client.apellidos}\n\nTeléfono: ${client.telefono}\nEmail: ${client.email}\nDirección: ${client.direccion}\n\nEsta función mostrará un modal completo con toda la información del cliente, historial de créditos y pagos.`);
+                if (!client) return;
+
+                Promise.all([
+                    database.ref('creditos').orderByChild('clienteId').equalTo(id).once('value'),
+                    database.ref('pagos').orderByChild('clienteId').equalTo(id).once('value')
+                ]).then(([creditsSnap, paymentsSnap]) => {
+                    const credits = creditsSnap.val() || {};
+                    const payments = paymentsSnap.val() || {};
+
+                    let creditsHtml = '';
+                    let totalCreditos = 0;
+                    let totalSaldo = 0;
+                    Object.entries(credits).forEach(([creditId, credit]) => {
+                        totalCreditos += credit.monto;
+                        totalSaldo += credit.saldoActual || 0;
+                        creditsHtml += `
+                            <tr>
+                                <td>${creditId.substr(-6)}</td>
+                                <td>${utils.formatDate(credit.fechaDesembolso)}</td>
+                                <td>${utils.formatMoney(credit.monto)}</td>
+                                <td>${utils.formatMoney(credit.saldoActual)}</td>
+                                <td>${utils.formatMoney(credit.cuotaMensual)}</td>
+                                <td><span class="badge badge-${credit.estado === 'ACTIVO' ? 'success' : (credit.estado === 'CANCELADO' ? 'info' : 'danger')}">${credit.estado}</span></td>
+                            </tr>
+                        `;
+                    });
+
+                    let paymentsHtml = '';
+                    let totalPagado = 0;
+                    Object.entries(payments).forEach(([paymentId, pago]) => {
+                        if (pago.estado === 'ANULADO') return;
+                        totalPagado += pago.monto;
+                        paymentsHtml += `
+                            <tr>
+                                <td>${utils.formatDate(pago.fecha)}</td>
+                                <td>${pago.creditoId?.substr(-6)}</td>
+                                <td>${pago.tipo}</td>
+                                <td>${utils.formatMoney(pago.monto)}</td>
+                                <td>${pago.metodo}</td>
+                            </tr>
+                        `;
+                    });
+
+                    const content = document.getElementById('clientDetailContent');
+                    content.innerHTML = `
+                        <div class="detail-view">
+                            <div class="detail-row"><div class="detail-label">Documento:</div><div>${client.tipoDocumento}: ${client.numeroDocumento}</div></div>
+                            <div class="detail-row"><div class="detail-label">Nombre:</div><div>${client.nombres} ${client.apellidos}</div></div>
+                            <div class="detail-row"><div class="detail-label">Fecha Nac.:</div><div>${utils.formatDate(client.fechaNacimiento)}</div></div>
+                            <div class="detail-row"><div class="detail-label">Teléfono:</div><div>${client.telefono} / ${client.telefonoSecundario || ''}</div></div>
+                            <div class="detail-row"><div class="detail-label">Email:</div><div>${client.email}</div></div>
+                            <div class="detail-row"><div class="detail-label">Dirección:</div><div>${client.direccion}</div></div>
+                            <div class="detail-row"><div class="detail-label">Ubicación:</div><div>${client.provincia || ''} - ${client.canton || ''}</div></div>
+                            <div class="detail-row"><div class="detail-label">Profesión:</div><div>${client.profesion || ''}</div></div>
+                            <div class="detail-row"><div class="detail-label">Empresa:</div><div>${client.empresa || ''}</div></div>
+                            <div class="detail-row"><div class="detail-label">Ingresos/Gastos:</div><div>Ing: ${utils.formatMoney(client.ingresosMensuales)} - Gast: ${utils.formatMoney(client.gastosMensuales)}</div></div>
+                            <div class="detail-row"><div class="detail-label">Capacidad:</div><div style="font-weight:bold;color:var(--primary-blue);">${utils.formatMoney((client.ingresosMensuales + (client.otrosIngresos||0) - client.gastosMensuales) * 0.4)}/mes</div></div>
+                            <div class="detail-row"><div class="detail-label">Banco:</div><div>${client.banco || ''} - ${client.tipoCuenta || ''} ${client.numeroCuenta || ''}</div></div>
+                        </div>
+                        <h4 style="margin:20px 0 10px;color:var(--primary-blue);">Resumen Financiero</h4>
+                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;">
+                            <div style="background:#f0f9ff;padding:10px;border-radius:8px;text-align:center;">
+                                <div>Total Créditos</div><div style="font-size:18px;font-weight:bold;">${utils.formatMoney(totalCreditos)}</div>
+                            </div>
+                            <div style="background:#f0fdf4;padding:10px;border-radius:8px;text-align:center;">
+                                <div>Total Pagado</div><div style="font-size:18px;font-weight:bold;color:var(--success);">${utils.formatMoney(totalPagado)}</div>
+                            </div>
+                            <div style="background:#fef3c7;padding:10px;border-radius:8px;text-align:center;">
+                                <div>Saldo Pendiente</div><div style="font-size:18px;font-weight:bold;color:var(--warning);">${utils.formatMoney(totalSaldo)}</div>
+                            </div>
+                        </div>
+                        <h4 style="margin:20px 0 10px;color:var(--primary-blue);">Créditos</h4>
+                        <div class="data-table-container">
+                            <table class="data-table">
+                                <thead><tr><th>No.</th><th>Fecha</th><th>Monto</th><th>Saldo</th><th>Cuota</th><th>Estado</th></tr></thead>
+                                <tbody>${creditsHtml || '<tr><td colspan="6">Sin créditos</td></tr>'}</tbody>
+                            </table>
+                        </div>
+                        <h4 style="margin:20px 0 10px;color:var(--primary-blue);">Pagos</h4>
+                        <div class="data-table-container">
+                            <table class="data-table">
+                                <thead><tr><th>Fecha</th><th>Crédito</th><th>Tipo</th><th>Monto</th><th>Método</th></tr></thead>
+                                <tbody>${paymentsHtml || '<tr><td colspan="5">Sin pagos</td></tr>'}</tbody>
+                            </table>
+                        </div>
+                    `;
+                    document.getElementById('modalClientDetail').classList.add('active');
+                });
+            },
+
+            closeDetailModal: () => {
+                document.getElementById('modalClientDetail').classList.remove('active');
+            },
+
+            printDetail: () => {
+                window.print();
             },
 
             exportToExcel: () => {
@@ -2761,6 +2873,7 @@
             init: () => {
                 creditModule.loadCredits();
                 creditModule.loadClientsSelect();
+                creditModule.populateDiaPagoSelect(); // Llenar el select de día de pago
                 document.getElementById('creditFechaDesembolso').value = utils.getToday();
                 
                 // Cargar configuración para valores por defecto
@@ -2769,6 +2882,17 @@
                     document.getElementById('creditTasa').value = config.tasaAnual || 16;
                     document.getElementById('creditComision').value = config.comisionApertura || 0;
                 });
+            },
+
+            populateDiaPagoSelect: () => {
+                const select = document.getElementById('creditDiaPago');
+                select.innerHTML = '';
+                for (let i = 1; i <= 30; i++) {
+                    const option = document.createElement('option');
+                    option.value = i;
+                    option.textContent = i;
+                    select.appendChild(option);
+                }
             },
 
             loadClientsSelect: () => {
@@ -3058,6 +3182,9 @@
                 document.getElementById('creditSubmitBtn').textContent = 'Desembolsar Crédito';
                 document.getElementById('creditClientId').disabled = false;
                 
+                // Asegurar que el select de día de pago esté poblado
+                creditModule.populateDiaPagoSelect();
+                
                 // Cargar valores por defecto
                 database.ref('configuracion').once('value', (snapshot) => {
                     const config = snapshot.val() || {};
@@ -3084,6 +3211,9 @@
                 document.getElementById('creditId').value = id;
                 document.getElementById('creditEditMode').value = 'true';
                 document.getElementById('creditSubmitBtn').textContent = 'Guardar Cambios';
+                
+                // Asegurar que el select de día de pago esté poblado
+                creditModule.populateDiaPagoSelect();
                 
                 // Cargar datos
                 document.getElementById('creditClientId').value = credit.clienteId;
@@ -3123,9 +3253,9 @@
                 utils.showLoading(true);
 
                 const clientId = document.getElementById('creditClientId').value;
-                const monto = parseFloat(document.getElementById('creditMonto').value);
-                const plazo = parseInt(document.getElementById('creditPlazo').value);
-                const tasa = parseFloat(document.getElementById('creditTasa').value);
+                const monto = parseFloat(document.getElementById('creditMonto').value) || 0;
+                const plazo = parseInt(document.getElementById('creditPlazo').value) || 0;
+                const tasa = parseFloat(document.getElementById('creditTasa').value) || 0;
                 const sistema = document.getElementById('creditSistema').value;
                 const fechaDesembolso = document.getElementById('creditFechaDesembolso').value;
 
@@ -3138,7 +3268,7 @@
                         tasaAnual: tasa,
                         sistema: sistema,
                         destino: document.getElementById('creditDestino').value,
-                        diaPago: parseInt(document.getElementById('creditDiaPago').value),
+                        diaPago: parseInt(document.getElementById('creditDiaPago').value) || 1,
                         seguroDesgravamen: parseFloat(document.getElementById('creditSeguro').value) || 0,
                         updatedAt: firebase.database.ServerValue.TIMESTAMP,
                         updatedBy: currentUser.uid
@@ -3146,9 +3276,16 @@
 
                     // Si no tiene pagos, permitir recalcular tabla
                     if (existingCredit.pagosRealizados === 0) {
-                        updates.cuotaMensual = creditModule.simulationData[0].cuotaTotal;
-                        updates.tablaAmortizacion = creditModule.simulationData;
-                        updates.interesPendiente = creditModule.simulationData.reduce((sum, t) => sum + t.interes, 0);
+                        // Recalcular simulación con los nuevos valores
+                        creditModule.calculateSimulation();
+                        if (creditModule.simulationData && creditModule.simulationData.length > 0) {
+                            updates.cuotaMensual = creditModule.simulationData[0].cuotaTotal;
+                            updates.tablaAmortizacion = creditModule.simulationData;
+                            updates.interesPendiente = creditModule.simulationData.reduce((sum, t) => sum + t.interes, 0);
+                            // Actualizar próximo pago
+                            const nextCuota = creditModule.simulationData.find(c => c.cuota === 1);
+                            if (nextCuota) updates.proximoPago = nextCuota.fecha;
+                        }
                     }
 
                     database.ref('creditos/' + creditId).update(updates)
@@ -3173,7 +3310,7 @@
                         sistema: sistema,
                         destino: document.getElementById('creditDestino').value,
                         fechaDesembolso: fechaDesembolso,
-                        diaPago: parseInt(document.getElementById('creditDiaPago').value),
+                        diaPago: parseInt(document.getElementById('creditDiaPago').value) || 1,
                         cuotaMensual: creditModule.simulationData[0].cuotaTotal,
                         saldoActual: monto,
                         capitalPendiente: monto,
@@ -3519,7 +3656,7 @@
 
                 const creditId = document.getElementById('paymentCreditId').value;
                 const tipo = document.getElementById('paymentTipo').value;
-                const monto = parseFloat(document.getElementById('paymentMonto').value);
+                const monto = parseFloat(document.getElementById('paymentMonto').value) || 0;
                 const fecha = document.getElementById('paymentFecha').value;
 
                 if (!creditId || !monto) {
@@ -3676,7 +3813,7 @@
 
                 const id = document.getElementById('editPaymentId').value;
                 const updates = {
-                    monto: parseFloat(document.getElementById('editPaymentMonto').value),
+                    monto: parseFloat(document.getElementById('editPaymentMonto').value) || 0,
                     fecha: document.getElementById('editPaymentFecha').value,
                     observaciones: document.getElementById('editPaymentObs').value,
                     updatedAt: firebase.database.ServerValue.TIMESTAMP,
@@ -3883,6 +4020,16 @@
                 });
             },
 
+            // Nueva función para ver mayor de una cuenta específica
+            verMayor: (cuentaCodigo) => {
+                // Cambiar a la pestaña de Mayor y seleccionar la cuenta
+                const mayorTab = document.querySelector('[onclick="accountingModule.switchTab(\'mayor\', this)"]');
+                if (mayorTab) accountingModule.switchTab('mayor', mayorTab);
+                
+                document.getElementById('mayorAccountSelect').value = cuentaCodigo;
+                accountingModule.loadMayor();
+            },
+
             loadDiario: () => {
                 const dateFrom = document.getElementById('accountingDateFrom')?.value;
                 const dateTo = document.getElementById('accountingDateTo')?.value;
@@ -3955,12 +4102,6 @@
                         container.innerHTML += html;
                     });
                 });
-            },
-
-            verMayor: (cuentaCodigo) => {
-                document.getElementById('mayorAccountSelect').value = cuentaCodigo;
-                accountingModule.switchTab('mayor', document.querySelector('[onclick="accountingModule.switchTab(\'mayor\', this)"]'));
-                accountingModule.loadMayor();
             },
 
             loadMayor: () => {
